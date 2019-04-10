@@ -9,20 +9,20 @@ typedef struct way {
     char tag[16];
     char data[16];
 } way;
-
 typedef struct loc {
     int address;
     char data[16];
+    // char tag[16];
 } loc;
-
 typedef struct about {
     char address[16];
     char write_method[2];
     int set;
     int ways;
     int tag_length;
+    int offset;
+    int access;
 } about;
-
 typedef struct saved {
     int pos;
     char address[16];
@@ -30,9 +30,13 @@ typedef struct saved {
 
 FILE* fr;
 
-char* toBinary(char hex);
 int calc(int size);
+char* toBinary(char hex);
 int toDecimal(char* binary);
+char* toHex(char* binary);
+char* store(way cache[][], int order[][], loc memory[], way current, about info);
+char** load(way cache[][], int order[][], loc memory[], way current, about info);
+int update (int order[][], int set, int ways, int dex);
 
 int main(int num, char* args[]) {
     char* file_name = args[num-5];
@@ -41,7 +45,7 @@ int main(int num, char* args[]) {
     sscanf(args[num-4], "%d", &csize); 
     csize += 1024;
     int ws;
-    sscanf(args[num-3], "%d", &ws);
+    sscanf(args[num-3], "%d", &ws);    
     int bsize;
     sscanf(args[num-1], "%d", &bsize);
 
@@ -77,6 +81,8 @@ int main(int num, char* args[]) {
             }
         }
 
+        int access_size = l[2];
+
         //Block offset
         char offset[block_size];
         for (int i = 0; i < sizeof(offset); i++) {
@@ -106,12 +112,18 @@ int main(int num, char* args[]) {
 
         if (line[0] == 's') {
             strcopy(current.data, l[3]);
-            
-            char* res = store(cache, order, memory, current, info)
-            printf("store, %s, %s\n", hex, res);
+            char* hit = store(cache, order, memory, current, info);
+            printf("store, %s, %s\n", hex, hit);
         }   
         else {
-            printf("load");
+            info.offset = toDecimal(offset);
+            info.access = access_size;
+            char** r = load(cache, order, memory, current, info);
+            char* hit;
+            strcopy(hit, r[0]);
+            char* value;
+            strcopy(value, r[1]);
+            printf("load, %s, %s, %s\n", hex, hit, toHex(value));
         }
     }
 
@@ -154,6 +166,35 @@ int toDecimal(char* binary) {
     return dec;
 }
 
+char* toHex(char* binary) {
+    char hex[sizeof(binary)/4 + 1];
+    for (int i = 0; i < sizeof(binary); i++) {
+        char individual[4];
+        for (int j = i; j < 4; j++) {
+            if (j >= sizeof(binary)) break;
+            individual[j] = hex[i*4 + j];
+        }
+        int t = toDecimal(individal);
+        if (t == 0) hex[i] = '0';
+        else if (t == 1) hex[i] = '1';
+        else if (t == 2) hex[i] = '2';
+        else if (t == 3) hex[i] = '3';
+        else if (t == 4) hex[i] = '4';
+        else if (t == 5) hex[i] = '5';
+        else if (t == 6) hex[i] = '6';
+        else if (t == 7) hex[i] = '7';
+        else if (t == 8) hex[i] = '8';
+        else if (t == 9) hex[i] = '9';
+        else if (t == 10) hex[i] = 'a';
+        else if (t == 11) hex[i] = 'b';
+        else if (t == 12) hex[i] = 'c';
+        else if (t == 13) hex[i] = 'd';
+        else if (t == 14) hex[i] = 'e';
+        else if (t == 15) hex[i] = 'f';
+    }
+    return hex;
+}
+
 char* store(way cache[][], int order[][], loc memory[], way current, about info) {
     int ways = info.ways;
     int set = info.set;
@@ -184,7 +225,9 @@ char* store(way cache[][], int order[][], loc memory[], way current, about info)
         if (found == true) return 'hit';
         current.dirty = 1;
         int dex = order[set][0].pos;
-        memory[order[set][0].address] = cache[dex];
+        if (cache[set][dex].dirty == 1) {
+            memory[order[set][0].address] = cache[set][dex];
+        }
         cache[set][dex] = current;
         update(order, set, ways, dex);
     }
@@ -192,8 +235,68 @@ char* store(way cache[][], int order[][], loc memory[], way current, about info)
     return 'miss';
 }
 
-int load() {
+char** load(way cache[][], int order[][], loc memory[], way current, about info) {
+    int ways = info.ways;
+    int set = info.set;
+    int address = toDecimal(info.address);
+    char res[4];
+    char* temp;
+    char* ret[2];
 
+    boolean contains = false;
+    for (int i = 0; i < ways; i++) {
+        if ((cache[set][i].valid == 1) && (sizeof(cache[set][i].tag) == sizeof(current.tag))) {
+            for (int i = 0; i < sizeof(current.tag); i++) {
+                if (cache[set][i].tag[i] != current.tag[i]) break;
+                if (i == sizeof(current.tag)-1) {
+                    contains = true;
+                    res = 'hit';
+                    strcopy(temp, cache[set][i].data);
+                }
+            }
+        }
+        if (contains == true) break;
+    }
+
+    if (contains == true) {
+        res = 'hit';
+    }
+
+    else if (info.write_method[1] = 't') {
+        res = 'miss';
+        strcopy(temp, memory[address].data);
+        way l;
+        l.valid = 1;
+        l.tag = current.tag;
+        strcopy(l.data, temp);
+        int dex = order[set][0].pos;
+        cache[set][dex] = l;
+        update(order, set, ways, dex);
+    }
+
+    else if (info.write_method[1] = 'b') {
+        res = 'miss';
+        strcopy(temp, memory[address].data);
+        way l;
+        l.valid = 1;
+        l.tag = current.tag; //CORRECT??
+        strcopy(l.data, temp);
+        int dex = order[set][0].pos;
+        //Write to memory
+        if (cache[set][dex].dirty == 1) {
+            memory[order[set][0].address] = cache[set][dex];
+        }
+        cache[set][dex] = l;
+        update(order, set, ways, dex);
+    }
+
+    strcopy(ret[0], res);
+    char value[sizeof(temp)];
+    for (int i = 0; i < info.access; i++) {
+        value[i] = temp[i+info.offset];
+    }
+    strcopy(ret[1], value);
+    return ret;
 }
 
 int update (int order[][], int set, int ways, int dex) {
