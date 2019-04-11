@@ -31,8 +31,8 @@ FILE* fr;
 
 int calc(int size);
 void toBinary(char* binary, char hex);
-int toDecimal(char *binary);
-void toHex(char* hex, char *binary);
+int toDecimal(char* binary, int size);
+void toHex(char* hex, char* binary);
 
 int main(int num, char* args[]) {
     char* file_name = args[num-5];
@@ -66,7 +66,8 @@ int main(int num, char* args[]) {
 
     while (fgets(line, 80, fr) != NULL) {
         //Copy address: binary into address, hex into hex
-        char address[17];
+        char address[16-block_size];
+        char all[17];
         char hex[4];
         int ext = 0;
         if (line[0] == 's') ext = 1;
@@ -75,19 +76,23 @@ int main(int num, char* args[]) {
             char conv[4];
             toBinary(conv, line[i+5+ext]);
             for (int j = 3; j >= 0; j--) {
-                address[4*i+j] = conv[j];
+                if (4*i+j < 16-block_size) address[4*i+j] = conv[j];
+                all[4*i+j] = conv[j];
             }
         }
-        address[16] = '\0';
+        all[16] = '\0';
 
         char* split = strtok(line, " ");
         int access_size = split[2]*block_size;
 
         //Block offset
         char offset[block_size];
-        for (int i = 0; i < sizeof(offset); i++) {
-            offset[i] = address[i];
-        } 
+        int in = 0;
+        for (int i = 15; i > 15-block_size; i--) {
+            offset[in] = all[i];
+            in++;
+        }
+
         //Index
         int set_size = calc(num_sets);
         char index[set_size];
@@ -109,7 +114,8 @@ int main(int num, char* args[]) {
 
         about info;
         strcpy(info.address, address);
-        info.set = toDecimal(index);
+        // printf("%s %s", address, info.address);
+        info.set = toDecimal(index, sizeof(index));
         info.ways = ws;
         strcpy(info.write_method, write_method);
 
@@ -122,7 +128,7 @@ int main(int num, char* args[]) {
             strcpy(current.data, data);
 
             int set = info.set;
-            int caddress = toDecimal(address);
+            int caddress = toDecimal(address, sizeof(address));
             char hit[4];
             strcpy(hit, "miss");
 
@@ -149,7 +155,7 @@ int main(int num, char* args[]) {
                 current.dirty = 1;
                 int dex = order[set][0].pos;
                 if (cache[set][dex].dirty == 1) {
-                    strcpy(memory[toDecimal(order[set][0].address)].data, cache[set][dex].data);
+                    strcpy(memory[toDecimal(order[set][0].address, sizeof(order[set][0].address))].data, cache[set][dex].data);
                 }
                 cache[set][dex] = current;
                 
@@ -170,10 +176,10 @@ int main(int num, char* args[]) {
         //WORKS
         //LOAD   
         else {
-            info.offset = toDecimal(offset);
+            info.offset = toDecimal(offset, sizeof(offset));
             info.access = access_size;
             int set = info.set;
-            int caddress = toDecimal(info.address);
+            int caddress = toDecimal(info.address, sizeof(info.address));
             char hit[4];
             strcpy(hit, "miss");
             char temp[32];
@@ -195,6 +201,7 @@ int main(int num, char* args[]) {
 
             if (found == 0 && info.write_method[1] == 't') {
                 strcpy(temp, memory[caddress].data);
+                // printf("test %s %d %s\n", info.address, caddress, temp);
                 way l;
                 l.valid = 1;
                 strcpy(l.tag, current.tag);
@@ -223,7 +230,7 @@ int main(int num, char* args[]) {
                 int dex = order[set][0].pos;
 
                 if (cache[set][dex].dirty == 1) {
-                    strcpy(memory[toDecimal(order[set][0].address)].data, cache[set][dex].data);
+                    strcpy(memory[toDecimal(order[set][0].address, sizeof(order[set][0].address))].data, cache[set][dex].data);
                 }
                 cache[set][dex] = l;
                 
@@ -239,7 +246,7 @@ int main(int num, char* args[]) {
                 strcpy(order[set][ws-1].address, order[set][dex].address);
             }
 
-            // printf("%s", temp);
+            // printf("%s\n", temp);
 
             char value[sizeof(temp)];
             char tracker[sizeof(temp)];
@@ -289,24 +296,52 @@ void toBinary(char binary[4], char hex) {
     else if (hex == 'f') strcpy(binary, "1111");
 }
 
-int toDecimal(char *binary) {
-    int dec;
-    float f = 0;
-    for (int i = 0; i < sizeof(binary); i++) {
-        if (binary[i] == 1) f = pow(2.0, i);
-        dec += (int)f;
+int toDecimal(char* binary, int size) {
+    int dec = 0;
+    // int temp = 1;
+    int raised = 0;
+    for (int i = 0; i < size; i++) {
+        raised = 0;
+        if (binary[i] == '1') {
+            raised = 1;
+            // temp = 1;
+            if (i == 1) raised = 2;
+            if (i == 2) raised = 4;
+            if (i == 3) raised = 8;
+            if (i == 4) raised = 16;
+            if (i == 5) raised = 16;
+            if (i == 6) raised = 16;
+            if (i == 7) raised = 16;
+            if (i == 8) raised = 16;
+            if (i == 9) raised = 16;
+            if (i == 10) raised = 16;
+            if (i == 11) raised = 16;
+            if (i == 12) raised = 16;
+            if (i == 13) raised = 16;
+            if (i == 14) raised = 16;
+            if (i == 15) raised = 16;
+            if (i == 16) raised = 16;
+            if (i > 16) printf("exceeded");
+            // for (int j = 0; j < i; j++) {
+            //     temp = raised;
+            //     raised = 2*temp;
+            // }
+            // dec = raised; //issue
+        }
+        dec = dec + raised;
     }
+    // printf("%d\n", dec);
     return dec;
 }
 
-void toHex(char* hex, char *binary) {
+void toHex(char* hex, char* binary) {
     for (int i = 0; i < sizeof(binary); i++) {
         char individual[4];
         for (int j = i; j < 4; j++) {
             if (j >= sizeof(binary)) break;
             individual[j] = hex[i*4 + j];
         }
-        int t = toDecimal(individual);
+        int t = toDecimal(individual, 4);
         if (t == 0) hex[i] = '0';
         else if (t == 1) hex[i] = '1';
         else if (t == 2) hex[i] = '2';
@@ -325,3 +360,5 @@ void toHex(char* hex, char *binary) {
         else if (t == 15) hex[i] = 'f';
     }
 }
+
+//WILL THIS UPDATE VARIABLES??
