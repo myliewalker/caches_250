@@ -7,11 +7,15 @@ typedef struct way {
     int valid;
     int dirty;
     char tag[16];
-    char data[16];
+    char data[80];
 } way;
 typedef struct loc {
     int address;
-    char data[16];
+    char data[80];
+    int accessed;
+    int filled;
+    // int times;
+    // int set_times;
 } loc;
 typedef struct about {
     char address[16];
@@ -45,7 +49,10 @@ int main(int num, char* args[]) {
     int bsize = 0;
     sscanf(args[num-1], "%d", &bsize);
 
+    int last = 0; //REMOVE
+
     int num_sets = csize / (bsize*ws);
+    int set_size = calc(num_sets);
     //Calculate sizes in base 2
     int cache_size = calc(csize);
     int num_ways = calc(ws);
@@ -61,14 +68,20 @@ int main(int num, char* args[]) {
     }
 
     way cache[num_sets][ws];
+    loc memory[num_sets][ws];
     saved order[num_sets][ws];
-    loc memory[num_sets*ws];
+    saved morder[num_sets][ws];
+    for (int i = 0; i < num_sets; i++) {
+        for (int j = 0; j < ws; j++) {
+            order[i][j].pos = j;
+            morder[i][j].pos = j;
+        }
+    }
 
     while (fgets(line, 80, fr) != NULL) {
-        //Copy address: binary into address, hex into hex
-        char address[16-block_size];
+        char address[17-block_size];
         char all[17];
-        char hex[4];
+        char hex[5];
         int ext = 0;
         if (line[0] == 's') ext = 1;
         for (int i = 3; i >= 0; i--) {
@@ -76,194 +89,374 @@ int main(int num, char* args[]) {
             char conv[4];
             toBinary(conv, line[i+5+ext]);
             for (int j = 3; j >= 0; j--) {
-                if (4*i+j < 16-block_size) address[4*i+j] = conv[j];
                 all[4*i+j] = conv[j];
             }
         }
+        hex[4] = '\0';
         all[16] = '\0';
+        int in = 0;
+        for (int i = 15-block_size; i >= 0; i--) {
+            address[in] = all[i];
+            in++;
+        }
+        address[16-block_size] = '\0';
 
-        char* split = strtok(line, " ");
-        int access_size = split[2]*block_size;
+        int access_size = 2*(line[10+ext]-48);
 
         //Block offset
-        char offset[block_size];
-        int in = 0;
+        char offset[block_size+1];
+        in = 0;
         for (int i = 15; i > 15-block_size; i--) {
             offset[in] = all[i];
             in++;
         }
+        offset[block_size] = '\0';
 
         //Index
-        int set_size = calc(num_sets);
-        char index[set_size];
-        for (int i = 0; i < sizeof(index); i++) {
-            index[i] = address[i + sizeof(offset)];
+        char index[set_size+1];
+        in = 0;
+        for (int i = 15-block_size; i > 15-block_size-set_size; i--) {
+            index[in] = all[i];
+            in++;
         }
+        index[set_size] = '\0';
+
         //Tag
-        char tag[16 - block_size - set_size];
-        for (int i = 0; i < sizeof(tag); i++) {
-            tag[i] = address[i + sizeof(offset) + sizeof(index)];
+        char tag[17 - block_size - set_size];
+        in = 0;
+        for (int i = 15-block_size-set_size; i >= 0; i--) {
+            tag[in] = all[i];
+            in++;
         }
+        tag[16-block_size-set_size] = '\0';
 
         //Create a way
         way current;
         current.valid = 1;
         current.dirty = 0;
         strcpy(current.tag, tag);
-        strcpy(current.data, "0000000000000000");
+        strcpy(current.data, "00000000000000000000000000000000");
 
         about info;
         strcpy(info.address, address);
-        // printf("%s %s", address, info.address);
         info.set = toDecimal(index, sizeof(index));
-        info.ways = ws;
         strcpy(info.write_method, write_method);
+
+        int set = info.set;
+        int caddress = toDecimal(address, sizeof(address));
+        int maddress = caddress;
+        if (caddress >= num_sets) {
+                maddress = (caddress)%(num_sets);
+        }
 
         char store[5];
         strcpy(store, "store");
         if (strncmp(line, store, 5) == 0) {
-            char data[8];
+            char data[80];
+            char tmp[80];
+            if (current.valid != 1) current.valid = 0;
+            if (current.dirty != 1) current.dirty = 0;
+
             if (line[13] != ' ') sscanf(line+13, "%s", data);
             else sscanf(line+14, "%s", data);
             strcpy(current.data, data);
+            strcat(current.data, "0000000000000000");
+            int hit = 0;
+            
+            //accounts for offset
+            info.offset = 2*toDecimal(offset, sizeof(offset));
+            char beginning[80];
+            if (info.offset != 0) {
+                for (int u = 0; u < 80; u++) {
+                    if (u == info.offset) {
+                        beginning[u] = '\0';
+                        break;
+                    }
+                    beginning[u] = '0';
+                }
+                strcat(beginning, current.data);
+                strncpy(current.data, beginning, 79);
+            }
 
-            int set = info.set;
-            int caddress = toDecimal(address, sizeof(address));
-            char hit[4];
-            strcpy(hit, "miss");
-
-            int found = 0;
+            //checks for a hit in cache
             for (int i = 0; i < ws; i++) {
-                if ((cache[set][i].valid == 1) && (sizeof(cache[set][i].tag) == sizeof(current.tag))) {
-                    for (int i = 0; i < sizeof(current.tag); i++) {
-                        if (cache[set][i].tag[i] != current.tag[i]) break;
-                        if (i == sizeof(current.tag)-1) {
-                            strcpy(cache[set][i].data, current.data);
-                            found = 1;
-                            strcpy(hit, "hit");
-                        }
+                if (cache[set][i].valid == 1  && (sizeof(cache[set][i].tag) == sizeof(current.tag))) {
+                    if (strcmp(cache[set][i].tag, current.tag) == 0) {
+                        strcpy(cache[set][i].data, current.data);
+                        hit = 1;
                     }
                 }
-                if (found == 1) break;
+                if (hit == 1) break;
+            }
+            
+            //check for a hit in memory
+            for (int i = 0; i < ws; i++) {
+                if (memory[maddress][i].accessed == 1 && memory[maddress][i].address == caddress) {
+                    hit = 1;
+                    strcpy(cache[set][i].data, memory[maddress][i].data);
+                    break;
+                }
             }
 
             if (info.write_method[1] == 't') {
-                strcpy(memory[caddress].data, current.data);
+                int mdex = morder[maddress][0].pos;
+                int add = memory[maddress][mdex].accessed;
+                strcpy(memory[maddress][mdex].data, current.data);
+                memory[maddress][mdex].filled = 1;
+                memory[maddress][mdex].accessed = add;
+                memory[maddress][mdex].address = caddress;
+
+                int mshift = 0;
+                saved cpy;
+                if (ws == 2) {
+                    cpy.pos = morder[maddress][0].pos;
+                    strcpy(cpy.address, morder[maddress][0].address);
+                    morder[maddress][0].pos = morder[maddress][1].pos;
+                    strcpy(morder[maddress][0].address, morder[maddress][1].address);
+                    morder[maddress][1].pos = cpy.pos;
+                    strcpy(morder[maddress][1].address, cpy.address);
+                }
+                if (ws > 2) {
+                    for (int k = 0; k < ws-1; k++) {
+                        if (k == mdex) mshift = 1;
+                        if (mshift == 1) {
+                            cpy.pos = morder[maddress][k].pos;
+                            strcpy(cpy.address, morder[maddress][k].address);
+                            morder[maddress][k].pos = morder[maddress][k+1].pos;
+                            strcpy(morder[maddress][k].address, morder[maddress][k+1].address);
+                        }
+                    }
+                    morder[maddress][ws-1].pos = cpy.pos;
+                    strcpy(morder[maddress][ws-1].address, cpy.address);
+                }
             }
 
-            else if (found == 0) {
-                current.dirty = 1;
+            else if (hit == 0 && info.write_method[1] == 'b') {
                 int dex = order[set][0].pos;
-                if (cache[set][dex].dirty == 1) {
-                    strcpy(memory[toDecimal(order[set][0].address, sizeof(order[set][0].address))].data, cache[set][dex].data);
+                int mdex = 0;
+                int loc = toDecimal(order[set][0].address, sizeof(order[set][0].address));
+                if (loc >= num_sets) {
+                    loc = (loc)%(num_sets);
                 }
-                cache[set][dex] = current;
+                if (cache[set][dex].dirty == 1) {
+                    strcpy(memory[loc][mdex].data, cache[set][dex].data);
+                    memory[loc][mdex].filled = 1;
+                    memory[loc][mdex].accessed = 1;
+                    memory[loc][mdex].address = toDecimal(order[set][0].address, sizeof(order[set][0].address));
+                }
+
+                strcpy(cache[set][dex].data, current.data);
+                strcpy(cache[set][dex].tag, current.tag);
+                cache[set][dex].valid = 1;
+                cache[set][dex].dirty = 1;
                 
                 int shift = 0;
-                for (int k = 0; k < ws-1; k++) {
-                    if (k == dex) shift = 1;
-                    if (shift == 1) {
-                        order[set][k].pos = order[set][k+1].pos;
-                        strcpy(order[set][k].address, order[set][k+1].address);
-                    }
+                saved ccpy;
+                if (ws == 2) {
+                    ccpy.pos = order[set][1].pos;
+                    strcpy(ccpy.address, order[set][1].address);
+                    order[set][0].pos = order[set][1].pos;
+                    strcpy(order[set][0].address, order[set][1].address);
+                    order[set][1].pos = ccpy.pos;
+                    strcpy(order[set][0].address, ccpy.address);
                 }
-                order[set][ws-1].pos = order[set][dex].pos;
-                strcpy(order[set][ws-1].address, order[set][dex].address);
+                if (ws > 2) {
+                    for (int k = 0; k < ws-1; k++) {
+                        if (k == dex) shift = 1;
+                        if (shift == 1) {
+                            ccpy.pos = order[set][k].pos;
+                            strcpy(ccpy.address, order[set][k].address);
+                            order[set][k].pos = order[set][k+1].pos;
+                            strcpy(order[set][k].address, order[set][k+1].address);
+                        }
+                    }
+                    order[set][ws-1].pos = ccpy.pos;
+                    strcpy(order[set][ws-1].address, ccpy.address);
+                }
+
+                int mshift = 0;
+                saved cpy;
+                if (ws == 2) {
+                    cpy.pos = morder[maddress][0].pos;
+                    strcpy(cpy.address, morder[maddress][0].address);
+                    morder[maddress][0].pos = morder[maddress][1].pos;
+                    strcpy(morder[maddress][0].address, morder[maddress][1].address);
+                    morder[maddress][1].pos = cpy.pos;
+                    strcpy(morder[maddress][1].address, cpy.address);
+                }
+                if (ws > 2) {
+                    for (int k = 0; k < ws-1; k++) {
+                        if (k == mdex) mshift = 1;
+                        if (mshift == 1) {
+                            cpy.pos = morder[maddress][k].pos;
+                            strcpy(cpy.address, morder[maddress][k].address);
+                            morder[maddress][k].pos = morder[maddress][k+1].pos;
+                            strcpy(morder[maddress][k].address, morder[maddress][k+1].address);
+                        }
+                    }
+                    morder[maddress][ws-1].pos = cpy.pos;
+                    strcpy(morder[maddress][ws-1].address, cpy.address);
+                }
             }
 
-            printf("store %s %s\n", hex, hit);
+            if (hit == 0) {
+                printf("store %s miss\n", hex);
+            }
+            else printf("store %s hit\n", hex);
         }
-        //WORKS
+        
         //LOAD   
         else {
-            info.offset = toDecimal(offset, sizeof(offset));
-            info.access = access_size;
-            int set = info.set;
-            int caddress = toDecimal(info.address, sizeof(info.address));
-            char hit[4];
-            strcpy(hit, "miss");
-            char temp[32];
+            info.offset = 2*toDecimal(offset, sizeof(offset));
+            char temp[80];
+            for (int i = 0; i < ws; i++) {
+                if (memory[maddress][i].accessed != 1) memory[maddress][i].accessed = 0;
+                if (memory[maddress][i].filled != 1) memory[maddress][i].filled = 0;
+            }
 
+            //check if the value is in the cache
             int found = 0;
             for (int i = 0; i < ws; i++) {
-                if ((cache[set][i].valid == 1) && (sizeof(cache[set][i].tag) == sizeof(current.tag))) {
-                    for (int j = 0; j < sizeof(current.tag); j++) {
-                        if (cache[set][i].tag[j] != current.tag[j]) break;
-                        if (j == sizeof(current.tag)-1) {
-                            found = 1;
-                            strcpy(hit, "hit");
-                            strcpy(temp, cache[set][i].data);
-                        }
+                if (cache[set][i].valid == 1){
+                    if (strcmp(cache[set][i].tag, current.tag) == 0) {
+                        found = 1;
+                        strcpy(temp, cache[set][i].data);
                     }
                 }
                 if (found == 1) break;
             }
 
-            if (found == 0 && info.write_method[1] == 't') {
-                strcpy(temp, memory[caddress].data);
-                // printf("test %s %d %s\n", info.address, caddress, temp);
-                way l;
-                l.valid = 1;
-                strcpy(l.tag, current.tag);
-                strcpy(l.data, temp);
-                int dex = order[set][0].pos;
-                cache[set][dex] = l;
-                
-                int shift = 0;
-                for (int k = 0; k < ws-1; k++) {
-                    if (k == dex) shift = 1;
-                    if (shift == 1) {
-                        order[set][k].pos = order[set][k+1].pos;
-                        strcpy(order[set][k].address, order[set][k+1].address);
-                    }
+            //check if the value is in memory
+            for (int i = 0; i < ws; i++) {
+                if (memory[maddress][i].accessed == 1 && memory[maddress][i].address == caddress) {
+                    found = 1;
+                    strcpy(temp, memory[maddress][i].data);
+                    // printf("%s\n", memory[maddress][i].data);
+                    break;
                 }
-                order[set][ws-1].pos = order[set][dex].pos;
-                strcpy(order[set][ws-1].address, order[set][dex].address);
+            }
+            
+            if (found == 0 && info.write_method[1] == 't') {
+                int mdex = morder[maddress][0].pos;
+                // printf("evict %d\n", mdex);
+                if (memory[maddress][mdex].filled == 0) {
+                    for (int i = 0; i < 79; i++) {
+                        memory[maddress][mdex].data[i] = '0';
+                    }
+                    memory[maddress][mdex].data[79] = '\0';
+                }
+                strcpy(temp, memory[maddress][mdex].data);
+                memory[maddress][mdex].address = caddress;
+                memory[maddress][mdex].accessed = 1;
+                // printf("%s\n", memory[maddress][mdex].data);
+
+                int mshift = 0;
+                saved cpy;
+                if (ws == 2) {
+                    cpy.pos = morder[maddress][0].pos;
+                    strcpy(cpy.address, morder[maddress][0].address);
+                    morder[maddress][0].pos = morder[maddress][1].pos;
+                    strcpy(morder[maddress][0].address, morder[maddress][1].address);
+                    morder[maddress][1].pos = cpy.pos;
+                    strcpy(morder[maddress][1].address, cpy.address);
+                }
+                if (ws > 2) {
+                    for (int k = 0; k < ws-1; k++) {
+                        if (k == mdex) mshift = 1;
+                        if (mshift == 1) {
+                            cpy.pos = morder[maddress][k].pos;
+                            strcpy(cpy.address, morder[maddress][k].address);
+                            morder[maddress][k].pos = morder[maddress][k+1].pos;
+                            strcpy(morder[maddress][k].address, morder[maddress][k+1].address);
+                        }
+                    }
+                    morder[maddress][ws-1].pos = cpy.pos;
+                    strcpy(morder[maddress][ws-1].address, cpy.address);
+                }
             }
 
             else if (found == 0 && info.write_method[1] == 'b') {
-                strcpy(temp, memory[caddress].data);
+                int mdex = morder[maddress][0].pos;
+                if (memory[maddress][mdex].filled == 0) {
+                    for (int i = 0; i < 79; i++) {
+                        memory[maddress][mdex].data[i] = '0';
+                    }
+                    memory[maddress][mdex].data[79] = '\0';
+                }
+                memory[maddress][mdex].accessed = 1;
+                strcpy(temp, memory[maddress][mdex].data);
+
                 way l;
-                l.valid = 1;
                 strcpy(l.tag, current.tag);
                 strcpy(l.data, temp);
                 int dex = order[set][0].pos;
+                int loc = toDecimal(order[set][0].address, sizeof(order[set][0].address));
+                if (loc >= num_sets) {
+                    loc = (loc)%(num_sets);
+                }
 
                 if (cache[set][dex].dirty == 1) {
-                    strcpy(memory[toDecimal(order[set][0].address, sizeof(order[set][0].address))].data, cache[set][dex].data);
+                    strcpy(memory[loc][mdex].data, cache[set][dex].data);
+                    memory[loc][mdex].accessed = 1;
+                    memory[loc][mdex].address = toDecimal(order[set][0].address, sizeof(order[set][0].address));
                 }
-                cache[set][dex] = l;
+
+                strcpy(cache[set][dex].data, current.data);
+                strcpy(cache[set][dex].tag, current.tag);
+                cache[set][dex].valid = 1;
+                cache[set][dex].dirty = 1;
                 
                 int shift = 0;
-                for (int k = 0; k < ws-1; k++) {
-                    if (k == dex) shift = 1;
-                    if (shift == 1) {
-                        order[set][k].pos = order[set][k+1].pos;
-                        strcpy(order[set][k].address, order[set][k+1].address);
-                    }
+                saved ccpy;
+                if (ws == 2) {
+                    ccpy.pos = order[set][1].pos;
+                    strcpy(ccpy.address, order[set][1].address);
+                    order[set][0].pos = order[set][1].pos;
+                    strcpy(order[set][0].address, order[set][1].address);
+                    order[set][1].pos = ccpy.pos;
+                    strcpy(order[set][0].address, ccpy.address);
                 }
-                order[set][ws-1].pos = order[set][dex].pos;
-                strcpy(order[set][ws-1].address, order[set][dex].address);
+                if (ws > 2) {
+                    for (int k = 0; k < ws-1; k++) {
+                        if (k == dex) shift = 1;
+                        if (shift == 1) {
+                            ccpy.pos = order[set][k].pos;
+                            strcpy(ccpy.address, order[set][k].address);
+                            order[set][k].pos = order[set][k+1].pos;
+                            strcpy(order[set][k].address, order[set][k+1].address);
+                        }
+                    }
+                    order[set][ws-1].pos = ccpy.pos;
+                    strcpy(order[set][ws-1].address, ccpy.address);
+                }
             }
 
-            // printf("%s\n", temp);
-
-            char value[sizeof(temp)];
-            char tracker[sizeof(temp)];
-            for (int i = 0; i < info.access; i++) {
-                value[i] = temp[i+info.offset];
-                tracker[i] = temp[i];
-                if (strcmp(temp, tracker) == 0) break;
+            char value[access_size+1];
+            if (info.offset == 0) {
+                for (int i = 0; i < access_size; i++) {
+                    value[i] = temp[i];
+                }
             }
-            // printf("%s", value);
-            // return 0;
-            // char val[sizeof(value)/4 + 1];
-            // toHex(val, value);
-            printf("load %s %s %s\n", hex, hit, value); //change one val
-            return 0;
+            else {
+                char add[access_size];
+                for (int i = 0; i < access_size; i++) {
+                    add[i] = '0';
+                }
+                for (int i = 0; i < access_size; i++) {
+                    if (i+info.offset >= sizeof(temp)-1) {
+                        value[i] = add[i];
+                    }
+                    else value[i] = temp[i+info.offset];
+                }
+            }
+            value[access_size] = '\0';
+
+            if (found == 0) printf("load %s miss %s\n", hex, value);
+            else printf("load %s hit %s\n", hex, value);
+
+            //  printf("evict %d\n", morder[maddress][0].pos);
         }
     }
-
     fclose(fr);
     return 0;
 }
@@ -298,39 +491,18 @@ void toBinary(char binary[4], char hex) {
 
 int toDecimal(char* binary, int size) {
     int dec = 0;
-    // int temp = 1;
+    int temp = 1;
     int raised = 0;
     for (int i = 0; i < size; i++) {
         raised = 0;
         if (binary[i] == '1') {
             raised = 1;
-            // temp = 1;
-            if (i == 1) raised = 2;
-            if (i == 2) raised = 4;
-            if (i == 3) raised = 8;
-            if (i == 4) raised = 16;
-            if (i == 5) raised = 16;
-            if (i == 6) raised = 16;
-            if (i == 7) raised = 16;
-            if (i == 8) raised = 16;
-            if (i == 9) raised = 16;
-            if (i == 10) raised = 16;
-            if (i == 11) raised = 16;
-            if (i == 12) raised = 16;
-            if (i == 13) raised = 16;
-            if (i == 14) raised = 16;
-            if (i == 15) raised = 16;
-            if (i == 16) raised = 16;
-            if (i > 16) printf("exceeded");
-            // for (int j = 0; j < i; j++) {
-            //     temp = raised;
-            //     raised = 2*temp;
-            // }
-            // dec = raised; //issue
+            for (int j = 0; j < i; j++) {
+                raised = 2*raised;
+            }
+            dec = dec + raised;
         }
-        dec = dec + raised;
     }
-    // printf("%d\n", dec);
     return dec;
 }
 
@@ -360,5 +532,3 @@ void toHex(char* hex, char* binary) {
         else if (t == 15) hex[i] = 'f';
     }
 }
-
-//WILL THIS UPDATE VARIABLES??
